@@ -8,6 +8,7 @@ package pool
 
 import (
 	"bytes"
+	"io"
 	"math/rand"
 	"runtime"
 	"testing"
@@ -360,8 +361,19 @@ func TestBufferGrowth(t *testing.T) {
 
 func BenchmarkWriteByte(b *testing.B) {
 	const n = 4 << 10
-	b.SetBytes(n)
 	buf := NewBuffer(make([]byte, n))
+	benchmarkWriteByte(b, buf, n)
+}
+
+func BenchmarkWriteByteStdlib(b *testing.B) {
+	const n = 4 << 10
+	buf := NewBuffer(make([]byte, n))
+	benchmarkWriteByte(b, buf, n)
+}
+
+func benchmarkWriteByte(b *testing.B, buf bufLike, n int) {
+	b.SetBytes(int64(n))
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
 		for i := 0; i < n; i++ {
@@ -372,29 +384,56 @@ func BenchmarkWriteByte(b *testing.B) {
 
 // From Issue 5154.
 func BenchmarkBufferNotEmptyWriteRead(b *testing.B) {
+	benchmarkBufferNotEmptyWriteRead(b, func() bufLike { return &Buffer{} })
+}
+
+func BenchmarkBufferNotEmptyWriteReadStdlib(b *testing.B) {
+	benchmarkBufferNotEmptyWriteRead(b, func() bufLike { return new(bytes.Buffer) })
+}
+
+func benchmarkBufferNotEmptyWriteRead(b *testing.B, fn func() bufLike) {
 	buf := make([]byte, 1024)
+	bf := fn()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		var b Buffer
-		b.Write(buf[0:1])
+		bf.Write(buf[0:1])
 		for i := 0; i < 5<<10; i++ {
-			b.Write(buf)
-			b.Read(buf)
+			bf.Write(buf)
+			bf.Read(buf)
 		}
+		bf.Reset()
 	}
 }
 
+type bufLike interface {
+	io.ByteWriter
+	io.ReadWriter
+	Len() int
+	Cap() int
+	Reset()
+}
+
 // Check that we don't compact too often. From Issue 5154.
-func BenchmarkBufferFullSmallReads(b *testing.B) {
+func benchmarkBufferFullSmallReads(b *testing.B, createReadWriter func() bufLike) {
 	buf := make([]byte, 1024)
+	bf := createReadWriter()
 	for i := 0; i < b.N; i++ {
-		var b Buffer
-		b.Write(buf)
-		for b.Len()+20 < b.Cap() {
-			b.Write(buf[:10])
+		bf.Write(buf)
+		for len(buf)+20 < cap(buf) {
+			bf.Write(buf[:10])
 		}
 		for i := 0; i < 5<<10; i++ {
-			b.Read(buf[:1])
-			b.Write(buf[:1])
+			bf.Read(buf[:1])
+			bf.Write(buf[:1])
 		}
+		bf.Reset()
 	}
+}
+
+func BenchmarkBufferFullSmallReads(b *testing.B) {
+	benchmarkBufferFullSmallReads(b, func() bufLike { return &Buffer{} })
+}
+
+func BenchmarkBufferFullSmallReadsStdlib(b *testing.B) {
+	benchmarkBufferFullSmallReads(b, func() bufLike { return &bytes.Buffer{} })
 }
